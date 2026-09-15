@@ -635,6 +635,18 @@ async function costruisciPdf(verbali, soloSezione, riassunto, info) {
     });
     return await doc.save();
   }
+  // Fase 8: il verbale di giornata ha la sua forma, un gradino sotto la relazione — stessi attrezzi.
+  if (info.giornata) {
+    disegnaGiornataPdf(info.giornata, {
+      PDF: PDF, normale: normale, grassetto: grassetto, scrivi: scrivi, spazio: spazio, nuovaPagina: nuovaPagina,
+      disegnaFotoGriglia: disegnaFotoGriglia, disegnaDocumenti: disegnaDocumenti, altezzaFoto: altezzaFoto, altezzaDoc: altezzaDoc,
+      disegnaIntestazione: disegnaIntestazione,
+      fotoPerSop: fotoPerVerbale, docPerSop: docPerVerbale,
+      giu: function (n) { y -= n; },
+      linea: function () { spazio(14); y -= 6; pagina.drawLine({ start: { x: M, y: y }, end: { x: L - M, y: y }, thickness: 0.8, color: PDF.rgb(0.2, 0.2, 0.2) }); y -= 12; }
+    });
+    return await doc.save();
+  }
   const c0 = cantierePerCodice(verbali[0].cantiere) || {};
   let ultimoCantiere = c0;
   const conCopertina = info.modo === 'periodo' || (info.modo === 'sezione' && verbali.length > 1);
@@ -881,6 +893,77 @@ function disegnaRelazionePdf(rel, a) {
   a.disegnaFirma();
 }
 
+/* Fase 8: il verbale di giornata ha la struttura del settimanale — intestazione,
+   riassunto delle elaborazioni per sezione (non diviso per sopralluogo), poi ogni
+   sopralluogo del giorno per conto suo con i suoi punti e le sue foto, e chi l'ha
+   fatto scritto a parole sotto ognuno. Niente firma in calce (D7): il verbale di
+   giornata non l'ha mai portata, qui in più c'è la citazione al posto suo. */
+function disegnaGiornataPdf(v, a) {
+  const c = cantierePerCodice(v.cantiere) || {};
+  const grigio = a.PDF.rgb(0.45, 0.45, 0.45);
+  const sops = sopralluoghiDelGiorno(v.cantiere, v.giorno);
+  const tecnici = (aziendaDiCantiere(c) || {}).tecnici || [];
+  a.nuovaPagina();
+  a.disegnaIntestazione();
+  a.scrivi(v.nome || 'VERBALE DI GIORNATA', 18, a.grassetto);
+  a.giu(4);
+  a.scrivi(v.codice, 11, a.normale);
+  a.scrivi('Cantiere: ' + (c.codice || '') + ' - ' + (c.nome || '') + (c.indirizzo ? ' - ' + c.indirizzo : ''), 11, a.normale);
+  a.scrivi('Committente: ' + (c.committente || ''), 11, a.normale);
+  a.scrivi('Data: ' + dataEstesa(v.giorno) + ' - ' + sops.length + (sops.length === 1 ? ' sopralluogo' : ' sopralluoghi'), 11, a.normale);
+  a.linea();
+  // Il riassunto generale: le sezioni compilate quel giorno, sommate, senza dividerle per sopralluogo.
+  a.scrivi('RIASSUNTO DELLE ELABORAZIONI', 12, a.grassetto);
+  a.giu(4);
+  let riassunte = 0;
+  CHIAVI_SEZIONI.forEach(function (k) {
+    const testo = String(v.sezioni[k] || '').trim();
+    if (!testo) return;
+    riassunte++;
+    const def = SEZIONI.find(function (z) { return z.chiave === k; });
+    a.spazio(30);
+    a.scrivi(def.nome.toUpperCase(), 10, a.grassetto, grigio);
+    if (def.elenco) righeElenco(testo).forEach(function (r) { a.scrivi('• ' + r, 11, a.normale, null, 6); });
+    else a.scrivi(testo, 11, a.normale);
+    a.giu(4);
+  });
+  if (!riassunte) a.scrivi('(nessuna sezione compilata)', 11, a.normale, grigio);
+  a.giu(6);
+  // Ogni sopralluogo del giorno, separato: i suoi punti, le sue foto, chi l'ha fatto.
+  sops.forEach(function (s) {
+    const vb = verbaleDiSopralluogo(s.codice);
+    const sezioni = vb ? vb.sezioni : s.sezioni;
+    const tecnico = vb && vb.tecnicoId ? tecnici.find(function (t) { return t.id === vb.tecnicoId; }) : null;
+    a.spazio(50);
+    a.linea();
+    a.scrivi(nomeSopralluogo(s).toUpperCase() + (vb ? '' : ' - NON CHIUSO'), 12, a.grassetto);
+    if (tecnico) a.scrivi('Eseguito da ' + tecnico.nome + (tecnico.ruolo ? ' - ' + tecnico.ruolo : ''), 10, a.normale, grigio);
+    a.giu(4);
+    let stampate = 0;
+    CHIAVI_SEZIONI.forEach(function (k) {
+      const testo = String(sezioni[k] || '').trim();
+      const foto = (a.fotoPerSop[s.id] || {})[k] || [];
+      if (!testo && !foto.length) return;
+      const def = SEZIONI.find(function (z) { return z.chiave === k; });
+      a.spazio(30 + (testo ? 0 : a.altezzaFoto(foto[0], c) + 30));
+      a.scrivi(def.nome.toUpperCase(), 10, a.grassetto, grigio);
+      if (testo) { if (def.elenco) righeElenco(testo).forEach(function (r) { a.scrivi('• ' + r, 11, a.normale, null, 6); }); else a.scrivi(testo, 11, a.normale); }
+      a.disegnaFotoGriglia(foto, c);
+      a.giu(4);
+      stampate++;
+    });
+    if (!stampate) a.scrivi('(nessuna sezione compilata)', 11, a.normale, grigio);
+    const docQui = a.docPerSop[s.id] || [];
+    if (docQui.length) {
+      a.giu(4);
+      a.spazio(Math.min(30 + a.altezzaDoc(docQui[0]), 780));
+      a.scrivi('DOCUMENTI ALLEGATI', 10, a.grassetto, grigio);
+      a.disegnaDocumenti(docQui, c);
+    }
+    a.giu(8);
+  });
+}
+
 async function creaPdfRelazione(relId, soloScarica) {
   if (!window.PDFLib) { avvisa('PDF non pronto: serve la rete la prima volta', 'err'); return; }
   const rel = relazione(relId);
@@ -908,12 +991,14 @@ async function scaricaRelazione(relId) {
 }
 
 /* ---------------- LA SETTIMANA ----------------
-   La settimana va da lunedì a domenica. Passata, i suoi audio e le sue foto restano nel
-   telefono solo fino a mercoledì. Lunedì e martedì una riga in testa dice "Libera memoria":
-   fa i PDF che mancano — il verbale di giornata di ogni giorno, il verbale di settimana di
-   ogni cantiere — li manda fuori, e poi svuota audio e foto. Da mercoledì lo fa l'app da
-   sola: i PDF restano nell'archivio dentro l'app, audio e foto se ne vanno. Le foto da lì
-   in poi vivono nei PDF, col loro referto. Il testo e i verbali non si toccano mai. */
+   La settimana va da lunedì a domenica. Passata, il suo audio resta nel telefono solo
+   fino a mercoledì: è la parte pesante dello spazio. Lunedì e martedì una riga in testa
+   dice "Libera memoria": fa i PDF che mancano — il verbale di giornata di ogni giorno,
+   il verbale di settimana di ogni cantiere — li manda fuori, e poi svuota l'audio. Da
+   mercoledì lo fa l'app da sola: i PDF restano nell'archivio dentro l'app, l'audio se ne
+   va. Foto, bolle e documenti restano sul telefono per tutta la durata del cantiere
+   (Fase 9): non sono mai stati nella lista di quello che si libera qui. Il testo e i
+   verbali non si toccano mai. */
 
 // Il lunedì della settimana in cui cade una data.
 function lunediDi(iso) {
@@ -995,11 +1080,12 @@ async function pdfDellaSettimana(inizio, fine) {
   return { schede: schede, mancanti: mancanti };
 }
 
-/* Audio e foto di una settimana se ne vanno dal telefono. Le registrazioni restano come
-   righe senza file — il loro testo è già nelle sezioni — le foto spariscono del tutto:
-   da qui in poi vivono nei PDF. */
+/* Solo l'audio di una settimana se ne va dal telefono: è la parte pesante dello
+   spazio. Le registrazioni restano come righe senza file — il loro testo è già
+   nelle sezioni. Foto, bolle e documenti restano per tutta la durata del
+   cantiere (Fase 9, D-roadblock chiuso il 15/09/2026): non li ha mai tolti
+   nessuna decisione, solo questa funzione lo faceva per sbaglio. */
 async function svuotaSettimana(inizio, fine) {
-  const loc = leggiLocale();
   const oggi = oggiISO();
   let tolti = 0;
   for (const s of valori(leggiTutto().sopralluoghi)) {
@@ -1010,26 +1096,17 @@ async function svuotaSettimana(inizio, fine) {
       await cancellaMedia(p.audio);
       p.audio = null; p.archiviato = oggi; toccato = true; tolti++;
     }
-    const foto = fotoDi(s);
-    if (foto.length) {
-      const id = {};
-      foto.forEach(function (f) { id[f.id] = true; });
-      loc.coda = loc.coda.filter(function (l) { return !id[l.foto]; });
-      await cancellaFileFoto(s);
-      s.media = (s.media || []).filter(function (m) { return !(m && m.tipo === 'foto'); });
-      toccato = true; tolti += foto.length;
-    }
     if (toccato) salva('sopralluogo', s);
   }
-  salvaLocale();
   return tolti;
 }
 
 /* "Libera memoria", a mano: i PDF della settimana escono dal foglio di condivisione
-   (mail, WhatsApp, salva), e solo dopo audio e foto si buttano. Annullando non si tocca niente. */
+   (mail, WhatsApp, salva), e solo dopo l'audio si butta. Foto, bolle e documenti restano
+   sul telefono per tutta la durata del cantiere. Annullando non si tocca niente. */
 async function liberaMemoria(inizio, fine) {
   if (!window.PDFLib) { avvisa('PDF non pronto: serve la rete la prima volta', 'err'); return; }
-  const ok = await chiedi('Libera memoria?', 'Settimana ' + dataSenzaAnno(inizio) + ' – ' + dataSenzaAnno(fine) + ': si fanno i PDF che mancano (verbale di ogni giornata, verbale di settimana di ogni cantiere), li mandi fuori o li salvi, e poi audio e foto di quei giorni si tolgono dal telefono. Restano nei PDF.', 'Vai', 'rosso');
+  const ok = await chiedi('Libera memoria?', 'Settimana ' + dataSenzaAnno(inizio) + ' – ' + dataSenzaAnno(fine) + ': si fanno i PDF che mancano (verbale di ogni giornata, verbale di settimana di ogni cantiere), li mandi fuori o li salvi, e poi l\'audio di quei giorni si toglie dal telefono. Foto, bolle e documenti restano fino alla chiusura del cantiere.', 'Vai', 'rosso');
   chiudiFoglio();
   if (!ok) return;
   avvisa('Preparo i PDF della settimana…');
@@ -1049,6 +1126,19 @@ async function liberaMemoria(inizio, fine) {
   aggiornaVista();
 }
 
+/* Fase 5: il verbale di settimana non aspetta più che qualcuno lo tocchi la domenica.
+   Appena il giorno cambia — quindi anche appena finisce la domenica — per ogni cantiere
+   che ha lavorato nella settimana appena chiusa si fanno, come già fa "Libera memoria",
+   i verbali di giornata che mancano e poi il verbale della settimana intera: non tocca
+   l'audio, quello aspetta ancora mercoledì (Fase 9). Se manca la rete o pdf-lib non è
+   ancora pronto, ci riprova da solo al prossimo cambio di giorno: la chiave del PDF
+   evita di rifare quello che è già archiviato. */
+async function creaVerbaliSettimanaScorsa() {
+  if (!window.PDFLib) return;
+  const sett = settimanaScorsa();
+  await pdfDellaSettimana(sett.inizio, sett.fine);
+}
+
 /* Da mercoledì l'app chiude da sola le settimane passate che hanno ancora audio o foto:
    fa i PDF che mancano, li tiene in archivio, e svuota. Se un PDF non riesce — manca la
    rete e pdf-lib non c'è ancora — quella settimana aspetta la volta dopo. */
@@ -1063,7 +1153,7 @@ async function pulisciSettimane() {
     chiuse++;
   }
   if (chiuse) {
-    avvisa((chiuse === 1 ? 'Settimana passata chiusa' : chiuse + ' settimane passate chiuse') + ': PDF in archivio, audio e foto liberati', 'ok');
+    avvisa((chiuse === 1 ? 'Settimana passata chiusa' : chiuse + ' settimane passate chiuse') + ': PDF in archivio, audio liberato', 'ok');
     SETT_CONTO.inizio = null;
     aggiornaVista();
   }
@@ -1075,11 +1165,22 @@ function segnaSettimanaFatta(inizio, come) {
   salvaLocale();
 }
 
-/* Il PDF di un verbale — di giornata o di sopralluogo — fatto e archiviato senza domande. */
+/* Il PDF di un verbale — di giornata o di sopralluogo — fatto e archiviato senza domande.
+   Fase 8: quello di giornata non passa se stesso a costruisciPdf, ma un sopralluogo finto
+   per ogni sopralluogo del giorno (stesso trucco della relazione): così le foto e i
+   documenti si raggruppano per sopralluogo, non tutti insieme come un unico verbale. */
 async function pdfVerbale(v) {
   if (!window.PDFLib) return null;
   let byte;
-  try { byte = await costruisciPdf([v], null, '', { modo: 'questo' }); } catch (e) { return null; }
+  try {
+    if (v.giornata) {
+      const sops = sopralluoghiDelGiorno(v.cantiere, v.giorno);
+      const finti = sops.map(function (s) { return { id: s.id, sopralluogo: s.codice, cantiere: v.cantiere, giorno: s.giorno }; });
+      byte = await costruisciPdf(finti.length ? finti : [{ cantiere: v.cantiere, giorno: v.giorno }], null, '', { modo: 'giornata', giornata: v });
+    } else {
+      byte = await costruisciPdf([v], null, '', { modo: 'questo' });
+    }
+  } catch (e) { return null; }
   return await archiviaPdf(byte, (v.nome ? v.codice + '_' + nomeFile(v.nome) : v.codice) + '.pdf',
     { chiave: 'verbale:' + v.codice, tipo: 'verbale', cantiere: v.cantiere, sopralluogo: v.sopralluogo || '', giorno: v.giorno });
 }
@@ -1116,8 +1217,10 @@ async function pdfPeriodo(c, dal, al) {
 
 /* ---------------- L'ARCHIVIO DEI PDF ----------------
    Un PDF generato non si butta più: resta nel telefono e si riapre dall'app. È lui
-   l'archivio vero, perché foto e audio prima o poi se ne vanno. Rifare lo stesso
-   documento non ne crea un secondo: sostituisce quello di prima, stessa chiave. */
+   l'archivio vero dell'audio, che prima o poi se ne va (foto, bolle e documenti
+   restano invece sul telefono per tutta la durata del cantiere, Fase 9). Rifare
+   lo stesso documento non ne crea un secondo: sostituisce quello di prima, stessa
+   chiave. */
 
 function pdfArchiviati() {
   const l = leggiLocale().pdf;
